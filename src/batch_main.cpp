@@ -21,32 +21,40 @@
 //  DEALINGS IN THE SOFTWARE.
 
 #include <batch_feature_matching/batch_feature_matcher.h>
+#include <boost/program_options.hpp>
 #include <iostream>
+
+namespace po = boost::program_options;
 
 int main(int argc, const char **argv) {
   // Check the value of argc.
   // If not enough parameters have been passed, inform user and exit.
   std::string path, format;
-  if (argc < 5) {
-    // Inform the user of how to use the program
-    std::cout << "Usage is -d <ImageDir> -f <ImageFormat>\nExample: "
-      << argv[0] << " -d /tmp -f jpg\n";
-    return -1;
-  } else {
-    for (int i = 1; i < argc - 1; i++) {
-      if (argv[i] == "-d") {
-        // We know the next argument *should* be the filename:
-        path = std::string(argv[i + 1]);
-      } else if (argv[i] == "-f") {
-        format = std::string(argv[i + 1]);
-      } else {
-        std::cout << "Not enough or invalid arguments, please try again.\n";
-        return -1;
-      }
-    }
+
+  po::options_description description("MyTool Usage");
+
+  description.add_options()
+    ("help,h", "Display this help message")
+    ("path,p", po::value<std::string>(), "Image folder location")
+    ("format,f", po::value<std::string>(), "Image format (bmp, jpg, png...)");
+
+  po::variables_map vm;
+  po::store(po::command_line_parser(argc, argv).options(description).run(), vm);
+  po::notify(vm);
+
+  if (vm.count("help")) {
+    std::cout << description;
   }
 
-  BatchFeatureMatcher bfm(path, format);
+  if (vm.count("path") && vm.count("format")) {
+    path = vm["path"].as<std::string>();
+    format = vm["format"].as<std::string>();
+    std::cout << "Setting path:   " << path << "\n"
+              << "Setting format: " << format << std::endl;
+    BatchFeatureMatcher bfm(path, format);
+  } else {
+    std::cout << description;
+  }
 
   return 0;
 }

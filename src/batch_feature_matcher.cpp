@@ -31,51 +31,114 @@
 #define CROSS_CHECK_FILTER 1
 #define DISTANCE_FILTER 0
 
+// using namespace boost::filesystem;
+// using namespace std;
+
 BatchFeatureMatcher::BatchFeatureMatcher(std::string path, std::string format)
     : path_(path), format_(format) {
-  detector_ = cv::FeatureDetector::create("SIFT");
+  cv::initModule_nonfree();
+  detector_  = cv::FeatureDetector::create("SIFT");
   extractor_ = cv::DescriptorExtractor::create("SIFT");
-  matcher_ = cv::DescriptorMatcher::create("FlannBased");
+  matcher_   = cv::DescriptorMatcher::create("FlannBased");
+
+  if(detector_.empty()) {
+    std::cout << "ERROR: Cannot create detector of given type!" << std::endl;
+  }
+  if (extractor_.empty()) {
+    std::cout << "ERROR: Cannot create extractor of given type!" << std::endl;
+  }
+  if (matcher_.empty()) {
+    std::cout << "ERROR: Cannot create matcher of given type!" << std::endl;
+  }
 
   matcher_filter_type_ = CROSS_CHECK_FILTER;
 
   matching_threshold_ = 0.9;  // DISTANCE_FILTER Only
 
+  std::cout << "Extracting features..." << std::endl;
   extractAllFeatures();
+  std::cout << "Matching features..." << std::endl;
   matchAll2All();
 }
 
 void BatchFeatureMatcher::extractAllFeatures() {
   boost::filesystem::path p(path_);
+  std::vector<boost::filesystem::directory_entry> file_entries;
+  try {
+    if (boost::filesystem::exists(p)) {
+      if (boost::filesystem::is_regular_file(p)) {
+        std::cout << p << " size is " << file_size(p) << '\n';
+      } else if (boost::filesystem::is_directory(p)) {
+        std::copy(boost::filesystem::directory_iterator(p),
+                  boost::filesystem::directory_iterator(),
+                  std::back_inserter(file_entries));
+      } else {
+        std::cout << p <<
+          " exists, but is neither a regular file nor a directory\n";
+      }
+    } else {
+      std::cout << p << " does not exist\n";
+    }
+  } catch (const boost::filesystem::filesystem_error& ex) {
+    std::cout << ex.what() << '\n';
+  }
+
   #pragma omp parallel for
-  for (boost::filesystem::path::iterator it = p.begin(); it != p.end(); ++it) {
-    if (it->extension() == format_) {
-      cv::Mat img = cv::imread(it->string(), CV_LOAD_IMAGE_COLOR);
-      std::string name(it->stem().string());
-      std::cout << "Extracting features of image " << name << std::endl;
+  for (size_t i = 0; i < file_entries.size(); i++) {
+    std::string full_image_path(file_entries[i].path().string());
+    std::string name(file_entries[i].path().stem().string());
+    std::string extension(file_entries[i].path().extension().string());
+    if (extension == "."+format_) {
+      std::cout << "Reading image " << full_image_path << "..." << std::endl;
+      cv::Mat img = cv::imread(full_image_path, CV_LOAD_IMAGE_GRAYSCALE);
       extractFeatures(img, name);
     }
   }
 }
 
 void BatchFeatureMatcher::matchAll2All() {
-  boost::filesystem::path p1(path_);
-  boost::filesystem::path p2(path_);
+  boost::filesystem::path p(boost::filesystem::current_path());
+  std::vector<boost::filesystem::directory_entry> file_entries;
+  try {
+    if (boost::filesystem::exists(p)) {
+      if (boost::filesystem::is_regular_file(p)) {
+        std::cout << p << " size is " << file_size(p) << '\n';
+      } else if (boost::filesystem::is_directory(p)) {
+        std::copy(boost::filesystem::directory_iterator(p),
+                  boost::filesystem::directory_iterator(),
+                  std::back_inserter(file_entries));
+      } else {
+        std::cout << p <<
+          " exists, but is neither a regular file nor a directory\n";
+      }
+    } else {
+      std::cout << p << " does not exist\n";
+    }
+  } catch (const boost::filesystem::filesystem_error& ex) {
+    std::cout << ex.what() << '\n';
+  }
+
   #pragma omp parallel for
-  for (boost::filesystem::path::iterator it1 = p1.begin();
-      it1 != p1.end(); ++it1) {
-    if (it1->extension() == "yaml") {
-      for (boost::filesystem::path::iterator it2 = p2.begin();
-           it2 != p2.end(); ++it2) {
-        if (it2->extension() == "yaml") {
-          std::string img1(it1->string());
-          std::string img2(it2->string());
+  for (size_t i = 0; i < file_entries.size(); i++) {
+    std::string full_image1_yaml_path(file_entries[i].path().string());
+    std::string name1(file_entries[i].path().stem().string());
+    std::string extension(file_entries[i].path().extension().string());
+    if (extension == ".yaml") {
+      for (size_t j = i; j < file_entries.size(); j++) {
+        std::string full_image2_yaml_path(file_entries[j].path().string());
+        std::string name2(file_entries[j].path().stem().string());
+        extension = file_entries[j].path().extension().string();
+        if (extension == ".yaml") {
           std::vector<cv::KeyPoint> kp1, kp2;
           cv::Mat d1, d2;
-          getKpAndDesc(img1, kp1, d1);
-          getKpAndDesc(img2, kp2, d2);
+          getKpAndDesc(full_image1_yaml_path, kp1, d1);
+          getKpAndDesc(full_image2_yaml_path, kp2, d2);
           std::vector<cv::DMatch> filt_m12;
-          match(d1, d2, filt_m12);
+          int matches, inliers;
+          match(kp1, d1, kp2, d2, filt_m12, matches, inliers);
+          std::cout << "Detected " << matches << " matches between "
+            << name1 << " and " << name2 << " with " << inliers
+            << " inliers" << std::endl;
         }
       }
     }
@@ -86,9 +149,14 @@ void BatchFeatureMatcher::getKpAndDesc(std::string filename,
                   std::vector<cv::KeyPoint>& kp,
                   cv::Mat& d) {
   cv::FileStorage f(filename, cv::FileStorage::READ);
-  cv::FileNode kptFileNode = f["keypoints"];
-  cv::read( kptFileNode, kp );
+  cv::FileNode fn = f["keypoints"];
+  cv::read(fn, kp);
   f["descriptors"] >> d;
+  int n;
+  f["n"] >> n;
+  if (n != kp.size()) {
+    std::cout << "ERROR File " << filename << " was NOT read correctly!" << std::endl;
+  }
 }
 
 void BatchFeatureMatcher::extractFeatures(const cv::Mat& image, std::string name) {
@@ -98,18 +166,27 @@ void BatchFeatureMatcher::extractFeatures(const cv::Mat& image, std::string name
   }
 
   std::vector<cv::KeyPoint> keypoints;
+  std::cout << "Detecting keypoints (" << name << ")" << std::endl;
   detector_->detect(image, keypoints);
+  std::cout << "Detected " << keypoints.size() << " keypoints!" << std::endl;
   cv::Mat descriptors;
+  std::cout << "Extracting descriptors (" << name << ")" << std::endl;
   extractor_->compute(image, keypoints, descriptors);
 
-  cv::FileStorage fs(name + "_kp.yaml", cv::FileStorage::WRITE);
+  std::cout << "Writting keypoints and descriptors to file (" << name << "_kp.yaml)" << std::endl;
+  cv::FileStorage fs(name + ".yaml", cv::FileStorage::WRITE);
+  fs << "n" << (int)keypoints.size();
   fs << "keypoints" << keypoints;
   fs << "descriptors" << descriptors;
   fs.release();
 }
 
-void BatchFeatureMatcher::match(const cv::Mat& d1, const cv::Mat& d2,
-                                std::vector<cv::DMatch>& filt_m12) {
+void BatchFeatureMatcher::match(const std::vector<cv::KeyPoint>& kp1,
+                                const cv::Mat& d1,
+                                const std::vector<cv::KeyPoint>& kp2,
+                                const cv::Mat& d2,
+                                std::vector<cv::DMatch>& filt_m12,
+                                int& matches, int& inliers) {
   switch (matcher_filter_type_) {
     case CROSS_CHECK_FILTER :
       crossCheckMatching(matcher_, d1, d2, filt_m12, 1);
@@ -121,6 +198,35 @@ void BatchFeatureMatcher::match(const cv::Mat& d1, const cv::Mat& d2,
       simpleMatching(matcher_, d1, d2, filt_m12);
       break;
   }
+
+  matches = (int)filt_m12.size();
+
+  // Get the matched keypoints
+  std::vector<cv::Point2f> matched_kp1, matched_kp2;
+  for (int i = 0; i < matches; i++) {
+    matched_kp1.push_back(kp1[filt_m12[i].trainIdx].pt);
+    matched_kp2.push_back(kp2[filt_m12[i].queryIdx].pt);
+  }
+
+  // Check the epipolar geometry
+  cv::Mat status;
+  cv::Mat F = cv::findFundamentalMat(matched_kp1,
+                                     matched_kp2,
+                                     CV_FM_RANSAC,
+                                     3,  // Epipolar threshold
+                                     0.999,
+                                     status);
+
+  // Is the fundamental matrix valid?
+  cv::Scalar f_sum_parts = cv::sum(F);
+  float f_sum = (float)f_sum_parts[0]
+              + (float)f_sum_parts[1]
+              + (float)f_sum_parts[2];
+  // if (f_sum < 1e-3)
+  //   return false;
+
+  // Check inliers size
+  inliers = (int)cv::sum(status)[0];
 }
 
 /** @function simpleMatching */

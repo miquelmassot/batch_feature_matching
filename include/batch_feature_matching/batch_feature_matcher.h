@@ -49,8 +49,12 @@ class BatchFeatureMatcher {
                     std::vector<cv::KeyPoint>& kp,
                     cv::Mat& d);
   void extractFeatures(const cv::Mat& image, std::string name);
-  void match(const cv::Mat& d1, const cv::Mat& d2,
-             std::vector<cv::DMatch>& filt_m12);
+  void match(const std::vector<cv::KeyPoint>& kp1,
+             const cv::Mat& d1,
+             const std::vector<cv::KeyPoint>& kp2,
+             const cv::Mat& d2,
+             std::vector<cv::DMatch>& filt_m12,
+             int& matches, int& inliers);
   void simpleMatching(cv::Ptr<cv::DescriptorMatcher>& dm,
                       const cv::Mat& d1, const cv::Mat& d2,
                       std::vector<cv::DMatch>& m12 );
