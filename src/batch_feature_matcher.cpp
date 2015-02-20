@@ -27,6 +27,7 @@
 #include <boost/filesystem.hpp>
 #include <string>
 #include <iostream>
+#include <fstream>
 
 #define CROSS_CHECK_FILTER 1
 #define DISTANCE_FILTER 0
@@ -118,6 +119,9 @@ void BatchFeatureMatcher::matchAll2All() {
     std::cout << ex.what() << '\n';
   }
 
+
+  std::ofstream results_file("results.txt");
+
   #pragma omp parallel for
   for (size_t i = 0; i < file_entries.size(); i++) {
     std::string full_image1_yaml_path(file_entries[i].path().string());
@@ -139,8 +143,10 @@ void BatchFeatureMatcher::matchAll2All() {
           std::cout << "Detected " << matches << " matches between "
             << name1 << " and " << name2 << " with " << inliers
             << " inliers" << std::endl;
+          results_file << name1 << " " << name2 << " " << matches << " " << inliers << std::endl;
         }
       }
+      results_file.close();
     }
   }
 }
@@ -160,25 +166,33 @@ void BatchFeatureMatcher::getKpAndDesc(std::string filename,
 }
 
 void BatchFeatureMatcher::extractFeatures(const cv::Mat& image, std::string name) {
-  if (image.empty()) {
-    std::cerr << "Image " << name << " is empty" << std::endl;
-    return;
+
+  // Check if file already exists
+  boost::filesystem::path my_file(name + ".yaml");
+  if (boost::filesystem::exists(my_file)) {
+    std::cout << "File " << name << ".yaml already exists. Skipping..." << std::endl;
+    // return
+  } else {
+    if (image.empty()) {
+      std::cerr << "Image " << name << " is empty" << std::endl;
+      return;
+    }
+
+    std::vector<cv::KeyPoint> keypoints;
+    std::cout << "Detecting keypoints (" << name << ")" << std::endl;
+    detector_->detect(image, keypoints);
+    std::cout << "Detected " << keypoints.size() << " keypoints!" << std::endl;
+    cv::Mat descriptors;
+    std::cout << "Extracting descriptors (" << name << ")" << std::endl;
+    extractor_->compute(image, keypoints, descriptors);
+
+    std::cout << "Writting keypoints and descriptors to file (" << name << "_kp.yaml)" << std::endl;
+    cv::FileStorage fs(name + ".yaml", cv::FileStorage::WRITE);
+    fs << "n" << (int)keypoints.size();
+    fs << "keypoints" << keypoints;
+    fs << "descriptors" << descriptors;
+    fs.release();
   }
-
-  std::vector<cv::KeyPoint> keypoints;
-  std::cout << "Detecting keypoints (" << name << ")" << std::endl;
-  detector_->detect(image, keypoints);
-  std::cout << "Detected " << keypoints.size() << " keypoints!" << std::endl;
-  cv::Mat descriptors;
-  std::cout << "Extracting descriptors (" << name << ")" << std::endl;
-  extractor_->compute(image, keypoints, descriptors);
-
-  std::cout << "Writting keypoints and descriptors to file (" << name << "_kp.yaml)" << std::endl;
-  cv::FileStorage fs(name + ".yaml", cv::FileStorage::WRITE);
-  fs << "n" << (int)keypoints.size();
-  fs << "keypoints" << keypoints;
-  fs << "descriptors" << descriptors;
-  fs.release();
 }
 
 void BatchFeatureMatcher::match(const std::vector<cv::KeyPoint>& kp1,
@@ -187,46 +201,57 @@ void BatchFeatureMatcher::match(const std::vector<cv::KeyPoint>& kp1,
                                 const cv::Mat& d2,
                                 std::vector<cv::DMatch>& filt_m12,
                                 int& matches, int& inliers) {
-  switch (matcher_filter_type_) {
-    case CROSS_CHECK_FILTER :
-      crossCheckMatching(matcher_, d1, d2, filt_m12, 1);
-      break;
-    case DISTANCE_FILTER:
-      thresholdMatching(matcher_, d1, d2, filt_m12, matching_threshold_);
-      break;
-    default :
-      simpleMatching(matcher_, d1, d2, filt_m12);
-      break;
+  // Clear the output vector first
+  filt_m12.clear();
+  // Check if there are any descriptors to match
+  if (d1.empty() || d2.empty()) {
+    // return
+  } else {
+    switch (matcher_filter_type_) {
+      case CROSS_CHECK_FILTER :
+        crossCheckMatching(matcher_, d1, d2, filt_m12, 1);
+        break;
+      case DISTANCE_FILTER:
+        thresholdMatching(matcher_, d1, d2, filt_m12, matching_threshold_);
+        break;
+      default :
+        simpleMatching(matcher_, d1, d2, filt_m12);
+        break;
+    }
   }
 
   matches = (int)filt_m12.size();
 
-  // Get the matched keypoints
-  std::vector<cv::Point2f> matched_kp1, matched_kp2;
-  for (int i = 0; i < matches; i++) {
-    matched_kp1.push_back(kp1[filt_m12[i].trainIdx].pt);
-    matched_kp2.push_back(kp2[filt_m12[i].queryIdx].pt);
+  if (matches > 0) {
+    // Get the matched keypoints
+    std::vector<cv::Point2f> matched_kp1, matched_kp2;
+    for (int i = 0; i < matches; i++) {
+      matched_kp1.push_back(kp1[filt_m12[i].trainIdx].pt);
+      matched_kp2.push_back(kp2[filt_m12[i].queryIdx].pt);
+    }
+
+    // Check the epipolar geometry
+    cv::Mat status;
+    cv::Mat F = cv::findFundamentalMat(matched_kp1,
+                                       matched_kp2,
+                                       CV_FM_RANSAC,
+                                       3,  // Epipolar threshold
+                                       0.999,
+                                       status);
+
+    // Is the fundamental matrix valid?
+    // cv::Scalar f_sum_parts = cv::sum(F);
+    // float f_sum = (float)f_sum_parts[0]
+    //            + (float)f_sum_parts[1]
+    //            + (float)f_sum_parts[2];
+    // if (f_sum < 1e-3)
+    //   return false;
+
+    // Check inliers size
+    inliers = (int)cv::sum(status)[0];
+  } else {
+    inliers = 0;
   }
-
-  // Check the epipolar geometry
-  cv::Mat status;
-  cv::Mat F = cv::findFundamentalMat(matched_kp1,
-                                     matched_kp2,
-                                     CV_FM_RANSAC,
-                                     3,  // Epipolar threshold
-                                     0.999,
-                                     status);
-
-  // Is the fundamental matrix valid?
-  cv::Scalar f_sum_parts = cv::sum(F);
-  float f_sum = (float)f_sum_parts[0]
-              + (float)f_sum_parts[1]
-              + (float)f_sum_parts[2];
-  // if (f_sum < 1e-3)
-  //   return false;
-
-  // Check inliers size
-  inliers = (int)cv::sum(status)[0];
 }
 
 /** @function simpleMatching */
