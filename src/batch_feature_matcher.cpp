@@ -119,36 +119,58 @@ void BatchFeatureMatcher::matchAll2All() {
     std::cout << ex.what() << '\n';
   }
 
-
-  std::ofstream results_file("results.txt");
-
-  #pragma omp parallel for
+  // Get the number of yaml files
+  std::vector<std::string> full_names;
+  std::vector<std::string> names;
   for (size_t i = 0; i < file_entries.size(); i++) {
-    std::string full_image1_yaml_path(file_entries[i].path().string());
-    std::string name1(file_entries[i].path().stem().string());
+    std::string full_name(file_entries[i].path().string());
+    std::string name(file_entries[i].path().stem().string());
     std::string extension(file_entries[i].path().extension().string());
     if (extension == ".yaml") {
-      for (size_t j = i; j < file_entries.size(); j++) {
-        std::string full_image2_yaml_path(file_entries[j].path().string());
-        std::string name2(file_entries[j].path().stem().string());
-        extension = file_entries[j].path().extension().string();
-        if (extension == ".yaml") {
-          std::vector<cv::KeyPoint> kp1, kp2;
-          cv::Mat d1, d2;
-          getKpAndDesc(full_image1_yaml_path, kp1, d1);
-          getKpAndDesc(full_image2_yaml_path, kp2, d2);
-          std::vector<cv::DMatch> filt_m12;
-          int matches, inliers;
-          match(kp1, d1, kp2, d2, filt_m12, matches, inliers);
-          std::cout << "Detected " << matches << " matches between "
-            << name1 << " and " << name2 << " with " << inliers
-            << " inliers" << std::endl;
-          results_file << name1 << " " << name2 << " " << matches << " " << inliers << std::endl;
-        }
-      }
-      results_file.close();
+      full_names.push_back(full_name);
+      names.push_back(name);
     }
   }
+
+  int nelem = names.size();
+  int sd_nelem = nelem*(nelem-1)/2;
+  std::cout << "Number of elements: " << nelem << " and " << sd_nelem << "\n";
+  std::vector<std::vector<int> > matches_vec(nelem,
+                                     std::vector<int>(sd_nelem));
+  std::vector<std::vector<int> > inliers_vec(matches_vec);
+  int_map m;
+
+  #pragma omp parallel for
+  for (size_t i = 0; i < names.size(); i++) {
+    for (size_t j = i + 1; j < names.size(); j++) {
+      std::vector<cv::KeyPoint> kp1, kp2;
+      cv::Mat d1, d2;
+      getKpAndDesc(full_names[i], kp1, d1);
+      getKpAndDesc(full_names[j], kp2, d2);
+      std::vector<cv::DMatch> filt_m12;
+      int matches, inliers;
+      match(kp1, d1, kp2, d2, filt_m12, matches, inliers);
+      std::cout << "Detected " << matches << " matches between "
+        << names[i] << " and " << names[j] << " with " << inliers
+        << " inliers" << std::endl;
+      m.insert(int_map::value_type(std::make_pair(i, j),
+                                   std::make_pair(matches, inliers)));
+    }
+  }
+
+  std::ofstream results_file("results.txt");
+  typedef int_map::const_iterator const_int_map_it;
+  for(const_int_map_it it = m.begin(); it != m.end(); it++) {
+    int i = it->first.first;
+    int j = it->first.second;
+    int matches = it->second.first;
+    int inliers = it->second.second;
+    results_file << names[i]
+          << " " << names[j]
+          << " " << matches
+          << " " << inliers << std::endl;
+  }
+  results_file.close();
 }
 
 void BatchFeatureMatcher::getKpAndDesc(std::string filename,

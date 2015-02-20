@@ -31,6 +31,9 @@ class BatchFeatureMatcher {
   BatchFeatureMatcher(std::string path, std::string format);
 
  private:
+  typedef std::pair<int, int> int_pair;
+  typedef std::map<int_pair, int_pair> int_map;
+
   int matcher_filter_type_;
   double matching_threshold_;
   std::vector<cv::DMatch> filtered_matches_;
