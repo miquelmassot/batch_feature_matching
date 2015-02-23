@@ -45,13 +45,18 @@ class BatchFeatureMatcher {
   cv::Mat descriptors_;
   std::vector<char> matches_mask_;
   std::string path_, format_;
+  std::vector<std::string> image_names_;
+  std::vector<std::string> image_paths_;
+  std::vector<std::string> yaml_paths_;
 
   void extractAllFeatures();
+  void printParams(cv::Algorithm* algorithm);
   void matchAll2All();
+  bool isInList(std::string name);
   void getKpAndDesc(std::string filename,
                     std::vector<cv::KeyPoint>& kp,
                     cv::Mat& d);
-  void extractFeatures(const cv::Mat& image, std::string name);
+  void extractFeatures(const cv::Mat& image, int image_idx);
   void match(const std::vector<cv::KeyPoint>& kp1,
              const cv::Mat& d1,
              const std::vector<cv::KeyPoint>& kp2,
