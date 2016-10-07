@@ -288,8 +288,8 @@ void BatchFeatureMatcher::match(const std::vector<cv::KeyPoint>& kp1,
     // Get the matched keypoints
     std::vector<cv::Point2f> matched_kp1, matched_kp2;
     for (int i = 0; i < matches; i++) {
-      matched_kp1.push_back(kp1[filt_m12[i].trainIdx].pt);
-      matched_kp2.push_back(kp2[filt_m12[i].queryIdx].pt);
+      matched_kp1.push_back(kp1[filt_m12[i].queryIdx].pt);
+      matched_kp2.push_back(kp2[filt_m12[i].trainIdx].pt);
     }
 
     // Check the epipolar geometry
